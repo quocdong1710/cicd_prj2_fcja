@@ -1,0 +1,80 @@
+version: 0.2
+
+phases:
+
+  pre_build:
+    commands:
+
+      - echo Logging in to Amazon ECR...
+
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION \
+        | docker login \
+        --username AWS \
+        --password-stdin $ECR_REPO
+
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+
+  build:
+    commands:
+
+      - echo Build started...
+
+      - docker build -t $ECR_REPO:$IMAGE_TAG .
+
+      - docker tag $ECR_REPO:$IMAGE_TAG $ECR_REPO:latest
+
+  post_build:
+    commands:
+
+      - echo Push image...
+
+      - docker push $ECR_REPO:$IMAGE_TAG
+
+      - docker push $ECR_REPO:latest
+
+      - echo Creating taskdef.json...
+
+      - |
+        cat > taskdef.json <<EOF
+        {
+          "family": "backend-task",
+          "networkMode": "awsvpc",
+          "containerDefinitions": [
+            {
+              "name": "backend",
+              "image": "${ECR_REPO}:${IMAGE_TAG}",
+              "essential": true,
+              "portMappings": [
+                {
+                  "containerPort": 3000,
+                  "hostPort": 3000
+                }
+              ]
+            }
+          ],
+          "requiresCompatibilities": ["FARGATE"],
+          "cpu": "256",
+          "memory": "512"
+        }
+        EOF
+
+      - echo Creating appspec.yaml...
+
+      - |
+        cat > appspec.yaml <<EOF
+        version: 0.0
+
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: <TASK_DEFINITION>
+                LoadBalancerInfo:
+                  ContainerName: backend
+                  ContainerPort: 3000
+        EOF
+
+artifacts:
+  files:
+    - taskdef.json
+    - appspec.yaml
